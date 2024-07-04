@@ -1,0 +1,39 @@
+2024-02-21 16:04:21,735 - root - INFO - Chart 1b start
+2024-02-21 16:04:21,735 - root - INFO - Closure 2b start
+2024-02-21 16:04:21,735 - root - INFO - Lang 1b start
+2024-02-21 16:04:21,735 - root - INFO - Math 2b start
+2024-02-21 16:04:21,735 - root - INFO - Time 1b start
+2024-02-21 16:04:21,736 - root - INFO - Chart 1b
+2024-02-21 16:04:21,737 - root - INFO - Closure 2b
+2024-02-21 16:04:21,737 - root - INFO - Lang 1b
+2024-02-21 16:04:21,737 - root - INFO - Math 2b
+2024-02-21 16:04:21,737 - root - INFO - Time 1b
+2024-02-21 16:04:21,742 - root - INFO - {'/source/org/jfree/chart/renderer/category/AbstractCategoryItemRenderer.java': [610]}
+2024-02-21 16:04:21,751 - root - INFO - {'/src/main/java/org/apache/commons/lang3/math/NumberUtils.java': [93, 94, 96]}
+2024-02-21 16:04:21,759 - root - INFO - xsq nbnbnb
+2024-02-21 16:04:21,764 - root - INFO - {'/src/com/google/javascript/jscomp/TypeCheck.java': [861]}
+2024-02-21 16:04:21,766 - root - INFO - {'/src/main/java/org/apache/commons/math3/distribution/HypergeometricDistribution.java': [89]}
+2024-02-21 16:04:21,774 - root - INFO - {'/src/main/java/org/joda/time/field/UnsupportedDurationField.java': [58, 59], '/src/main/java/org/joda/time/Partial.java': [63, 67]}
+2024-02-21 16:04:21,778 - root - INFO - xsq nbnbnb
+2024-02-21 16:04:21,782 - root - INFO - xsq nbnbnb
+2024-02-21 16:04:21,793 - root - INFO - xsq nbnbnb
+2024-02-21 16:04:36,534 - root - INFO - Chart Time Cost: 0:00:00.011787  
+2024-02-21 18:06:53,668 - root - INFO - Time Time Cost: 2:02:31.736805  
+2024-02-21 19:38:09,579 - root - INFO - Math Time Cost: 3:33:47.750764  
+2024-02-21 21:26:53,166 - root - INFO - Lang Time Cost: 5:22:31.385957  
+2024-02-22 02:48:17,624 - root - INFO - Chart 1b start
+2024-02-22 02:48:17,625 - root - INFO - Chart 1b
+2024-02-22 02:48:17,647 - root - INFO - {'/source/org/jfree/chart/renderer/category/AbstractCategoryItemRenderer.java': [610]}
+2024-02-22 02:49:28,244 - root - INFO - xsq nbnbnb
+2024-02-22 02:59:06,546 - root - INFO - Chart 1b start
+2024-02-22 02:59:06,548 - root - INFO - Chart 1b
+2024-02-22 02:59:06,554 - root - INFO - {'/source/org/jfree/chart/renderer/category/AbstractCategoryItemRenderer.java': [610]}
+2024-02-22 02:59:06,812 - root - INFO - xsq nbnbnb
+2024-02-22 05:01:37,072 - root - INFO - Chart Time Cost: 2:02:30.259971  
+2024-02-22 05:01:39,224 - root - INFO - all finish
+2024-02-22 05:05:33,575 - root - INFO - Closure 3b start
+2024-02-22 05:05:33,576 - root - INFO - Closure 3b
+2024-02-22 05:05:33,590 - root - INFO - {'/src/com/google/javascript/jscomp/FlowSensitiveInlineVariables.java': [68, 122, 157]}
+2024-02-22 05:05:33,591 - root - INFO - xsq nbnbnb
+2024-02-22 09:48:39,960 - root - INFO - Closure Time Cost: 4:43:06.270050  
+2024-02-22 09:48:46,390 - root - INFO - all finish

@@ -1,0 +1,983 @@
+import os
+import pickle
+import os
+import time
+import pickle
+import json
+import shutil
+import subprocess
+import sys
+import signal
+import math
+import operator
+import multiprocessing
+import ExecutorTool
+import secondOrderExecutorTool
+import logging
+import paramiko
+import socket
+from paramiko.ssh_exception import NoValidConnectionsError, AuthenticationException
+import concurrent.futures
+with open('config.json', 'r') as configFile:
+    configData = json.load(configFile)
+tpydataPath = configData['tpydataPath']
+outputCleanPath = configData['outputCleanPath']
+djSrcPath = configData['djSrcPath']
+mutantsFilePath = configData['mutantsFilePath']
+faliingTestOutputPath = configData['faliingTestOutputPath']
+faultlocalizationResultPath = configData['faultlocalizationResultPath']
+SOMfaultlocalizationResultPath = configData['SOMfaultlocalizationResultPath']
+sbflMethod = ['dstar', 'dstar_sub_one', 'ochiai', 'ochiai_sub_one', 'ochiai_sub_two', 'gp13', 'gp13_sub_one', 'gp13_sub_two',
+              'op2', 'op2_sub_one', 'op2_sub_two', 'jaccard', 'jaccard_sub_one', 'russell', 'russell_sub_one', 'turantula',
+              'turantula_sub_one', 'naish1', 'binary', 'crosstab', 'dstar2']
+sourcePath = {
+    'Chart': {'26': 'source'},
+    'Cli': {'29': 'src/java', '39': 'src/main/java'},
+    'Closure': {'176': 'src'},
+    'Codec': {'10': 'src/java', '18': 'src/main/java'},
+    'Compress': {'47': 'src/main/java'},
+    'Csv': {'16': 'src/main/java'},
+    'Gson': {'18': 'gson/src/main/java'},
+    'JacksonCore': {'26': 'src/main/java'},
+    'JacksonDatabind': {'112': 'src/main/java'},
+    'JacksonXml': {'6': 'src/main/java'},
+    'Jsoup': {'93': 'src/main/java'},
+    'JxPath': {'22': 'src/java'},
+    'Lang': {'35': 'src/main/java', '65': 'src/java'},
+    'Math': {'84': 'src/main/java', '106': 'src/java'},
+    'Mockito': {'38': 'src'},
+    'Time': {'27': 'src/main/java'}
+}
+password = "Van@1999."
+project = {
+    "Chart": 26,
+    "Cli": 39,
+    "Closure": 176,
+    "Codec": 18,
+    # "Collections": 4,
+    "Compress": 47,
+    "Csv": 16,
+    "Gson": 18,
+    "JacksonCore": 26,
+    "JacksonDatabind": 112,
+    "JacksonXml": 6,
+    "Jsoup": 93,
+    "JxPath": 22,
+    "Lang": 65,
+    "Math": 106,
+    "Mockito": 38,
+    "Time": 27,
+}
+
+
+def get_host_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(('8.8.8.8', 80))
+    return s.getsockname()[0]
+
+
+def put_file(hostname, username, passwd, localfile, romotefile):
+    '''
+    sftp上传文件
+    :param hostname: 远程主机ip
+    :param username: 用户名
+    :param passwd: 密码
+    :param localfile: 本地文件路径
+    :param romotefile: 远程文件路径
+    ,传入参数分别是远程主机ip,密码,本地文件,远程文件
+    '''
+    try:
+        transfer = paramiko.Transport((hostname, 22))
+        transfer.connect(username=username, password=passwd)
+        sftp = paramiko.SFTPClient.from_transport(transfer)
+    except Exception as E:
+        print('出现错误:', E)
+    else:
+        sftp.put(localfile, romotefile)
+        print('上传成功!')
+    finally:
+        sftp.close()
+
+
+def sftp_upload(hostname, username, password, localpath, remotepath):
+    """
+    通过 SFTP 协议上传文件或文件夹
+    :param hostname: 远程主机 IP
+    :param username: 登录用户名
+    :param password: 登录密码
+    :param localpath: 本地文件或文件夹路径
+    :param remotepath: 远程文件或文件夹路径
+    :return: 无返回值
+    """
+    # 创建 SFTP 连接
+    transport = paramiko.Transport((hostname, 22))
+    transport.connect(username=username, password=password)
+    sftp = paramiko.SFTPClient.from_transport(transport)
+
+    # 判断本地文件或文件夹是文件还是文件夹
+    if os.path.isfile(localpath):
+        # 上传文件
+        sftp.put(localpath, remotepath)
+        print(f"上传文件 {localpath} 到 {remotepath} 成功！")
+    elif os.path.isdir(localpath):
+        # 上传文件夹
+        parent_remote_path = remotepath.rstrip('/')
+        parent_local_path = localpath.rstrip('/')
+        for root, dirs, files in os.walk(localpath):
+            for file in files:
+                local_file_path = os.path.join(root, file)
+                remote_file_path = os.path.join(parent_remote_path, os.path.relpath(local_file_path, parent_local_path))
+                remote_file_path = remote_file_path.replace("\\", "/")
+                sftp.put(local_file_path, remote_file_path)
+                print(f"上传文件 {local_file_path} 到 {remote_file_path} 成功！")
+    else:
+        print(f"本地路径 {localpath} 不是文件也不是文件夹！")
+
+    # 关闭连接
+    sftp.close()
+    transport.close()
+
+
+# 使用scp命令从30服务器上下载临时文件
+def cpFromRemote():
+    os.makedirs(os.path.join(djSrcPath, projectDir))
+    cmd = f'sshpass -p {password} scp -o StrictHostKeyChecking=no -r {"fanluxi"}@{"202.4.130.30"}:{os.path.join(djSrcPath, projectDir, versionDir)} {os.path.join(djSrcPath, projectDir)}'
+    result = subprocess.run(
+        cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        return False
+    os.makedirs(os.path.join(outputCleanPath, projectDir))
+    cmd = f'sshpass -p {password} scp -o StrictHostKeyChecking=no -r {"fanluxi"}@{"202.4.130.30"}:{os.path.join(outputCleanPath, projectDir, versionDir)} {os.path.join(outputCleanPath, projectDir)}'
+    result = subprocess.run(
+        cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        return False
+    os.makedirs(os.path.join(tpydataPath, projectDir))
+    cmd = f'sshpass -p {password} scp -o StrictHostKeyChecking=no -r {"fanluxi"}@{"202.4.130.30"}:{os.path.join(tpydataPath, projectDir, versionDir)} {os.path.join(tpydataPath, projectDir)}'
+    result = subprocess.run(
+        cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        return False
+    os.makedirs(os.path.join(faliingTestOutputPath, projectDir))
+    cmd = f'sshpass -p {password} scp -o StrictHostKeyChecking=no -r {"fanluxi"}@{"202.4.130.30"}:{os.path.join(faliingTestOutputPath, projectDir, versionDir)} {os.path.join(faliingTestOutputPath, projectDir)}'
+    result = subprocess.run(
+        cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        return False
+    return True
+
+
+def get_file(hostname, username, password, remote_name, local_name):
+
+    try:
+        transport = paramiko.Transport((hostname, 22))
+        transport.connect(username=username, password=password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+
+    except AuthenticationException as e:
+        return '主机%s密码错误' % (hostname)
+    except Exception as e:
+        return '未知错误: ', e
+    else:
+        sftp.get(remote_name, local_name)  # 下载文件
+        if os.path.exists(local_name):
+            print('下载成功.')
+        else:
+            print('下载失败')
+    finally:
+        transport.close()
+
+
+def logger_config(log_path):
+    '''
+    配置log
+    :param log_path: 输出log路径
+    :return:
+    '''
+    '''
+    logger是日志对象,handler是流处理器,console是控制台输出(没有console也可以,将不会在控制台输出,会在日志文件中输出)
+    '''
+    # 获取logger对象
+    logger = logging.getLogger()
+    # 输出DEBUG及以上级别的信息，针对所有输出的第一层过滤
+    logger.setLevel(level=logging.DEBUG)
+    # 获取文件日志句柄并设置日志级别，第二层过滤
+    handler = logging.FileHandler(log_path, encoding='UTF-8')
+    handler.setLevel(logging.INFO)
+    # 生成并设置文件日志格式
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    # console相当于控制台输出，handler文件输出。获取流句柄并设置日志级别，第二层过滤
+    console = logging.StreamHandler()
+    console.setLevel(logging.DEBUG)
+    # 为logger对象添加句柄
+    logger.addHandler(handler)
+    logger.addHandler(console)
+    return logger
+
+# mbfl计算公式
+
+
+def Jaccard(Akf, Anf, Akp):
+    if (Akf + Anf + Akp) == 0:
+        return 0
+    return Akf / (Akf + Anf + Akp)
+
+
+def Ochiai(Akf, Anf, Akp):
+    if (Akf + Anf) * (Akf + Akp) == 0:
+        return 0
+    return Akf / math.sqrt((Akf + Anf) * (Akf + Akp))
+
+
+def Op2(Akf, Akp, Anp):
+    return Akf - Akp / (Akp + Anp + 1)
+
+
+def Tarantula(Akf, Anf, Akp, Anp):
+    if (Akf + Akp) == 0:
+        return 0
+    if ((Akf + Anf) != 0) and ((Akp + Anp) == 0):
+        return 1
+
+    return (Akf / (Akf + Anf)) / ((Akf / (Akf + Anf)) + (Akp / (Akp + Anp)))
+
+
+def Dstar3(Akf, Akp, Anf):
+    if (Akp + Anf) == 0:
+        return sys.float_info.max
+    return math.pow(Akf, 3) / (Akp + Anf)
+
+# 清空目录（包括非空目录）
+
+
+def clearDir(Path):
+    if os.path.exists(Path):
+        shutil.rmtree(Path, ignore_errors=True)
+
+
+# 自动创建不存在的目录
+def checkAndCreateDir(Path):
+    if not os.path.exists(Path):
+        os.mkdir(Path)
+
+
+def run(cmd, shell=False):
+    """
+    开启子进程，执行对应指令，控制台打印执行过程，然后返回子进程执行的状态码和执行返回的数据
+    :param cmd: 子进程命令
+    :param shell: 是否开启shell
+    :return: 子进程状态码和执行结果
+    """
+    print('\033[1;32m************** START **************\033[0m')
+
+    p = subprocess.Popen(
+        cmd, shell=shell, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    result = []
+    while p.poll() is None:
+        line = p.stdout.readline().strip()
+        if line:
+            line = _decode_data(line)
+            result.append(line)
+            print('\033[1;35m{0}\033[0m'.format(line))
+            if 'mutate' in line:
+                # 清空缓存
+                sys.stdout.flush()
+                sys.stderr.flush()
+                break
+        # 清空缓存
+        sys.stdout.flush()
+        sys.stderr.flush()
+    if p.poll is None:
+        os.killpg(p.pid, signal.SIGTERM)
+    # 判断返回码状态
+    if p.returncode == 0:
+        print('\033[1;32m************** SUCCESS **************\033[0m')
+    else:
+        print('\033[1;31m************** FAILED **************\033[0m')
+    return p.returncode, '\r\n'.join(result)
+
+
+def _decode_data(byte_data: bytes):
+    """
+    解码数据
+    :param byte_data: 待解码数据
+    :return: 解码字符串
+    """
+    try:
+        return byte_data.decode('UTF-8')
+    except UnicodeDecodeError:
+        return byte_data.decode('GB18030')
+
+
+def getSbflSus(project, version):
+    """
+    获取sbfl的怀疑度值
+    :param project: 项目名
+    :param version: 版本号
+    :return: 错误行信息和怀疑度列表
+    """
+    """
+    suspiciousSbfl存储格式:
+    错误文件路径: {
+        sbfl方法名:{
+            行号: 怀疑度
+            ...
+            行号: 怀疑度
+        }
+    }
+    """
+    """
+    faultLocalization存储格式:
+    错误文件路径: [行号, ..., 行号]
+    }
+    """
+    try:
+        suspiciousSbflPath = os.path.join(
+            faultlocalizationResultPath, project, version, "suspiciousSbfl.json")
+        faultLocalizationPath = os.path.join(
+            faultlocalizationResultPath, project, version, "faultLocalization.json")
+        if not os.path.exists(suspiciousSbflPath) or not os.path.exists(faultLocalizationPath):
+            print('\033[1;32m************** getSbflSus **************\033[0m')
+            hugeToFilePath = os.path.join(
+                outputCleanPath, project, version, "HugeToFile.txt")
+            with open(hugeToFilePath, 'r') as f:
+                hugeToFileList = f.readlines()
+            hugeToFileList = [s.split('\t')[0] for s in hugeToFileList]
+            delIndexPath = os.path.join(
+                tpydataPath, project, version, "data_saveAgain_del_statement_index")
+            with open(delIndexPath, 'rb') as f:
+                delIndexList = pickle.load(f)
+            faultPlusHugePath = os.path.join(
+                outputCleanPath, project, version, "faultPlusHuge.in")
+            with open(faultPlusHugePath, 'rb') as f:
+                faultLineDic = pickle.load(f)
+            susScorePath = os.path.join(
+                tpydataPath, project, version, "sus_score")
+            with open(susScorePath, 'rb') as f:
+                susScoreList = pickle.load(f)
+            faultFilesLine = dict()
+            for fault in faultLineDic.keys():
+                fileLineNum = list()
+                for index in range(0, len(hugeToFileList)):
+                    if hugeToFileList[index] in fault:
+                        fileLineNum.append(index)
+                faultFilesLine[fault] = fileLineNum
+            faultSbflSus = dict()
+            for num in faultFilesLine.keys():
+                # print(num)
+                sbflSus = dict()
+                for item in sbflMethod:
+                    sbflSus[item] = dict()
+                    faultSbflSus[num] = dict()
+                t = 0
+                distance = 0
+                tFlag = True
+                tFlag2 = True
+                for index in range(0, len(hugeToFileList)):
+                    if index in faultFilesLine[num] and tFlag:
+                        distance = index
+                        tFlag = False
+                        for i in range(0, len(faultLineDic[num])):
+                            faultLineDic[num][i] = faultLineDic[num][i] - distance
+
+                    if delIndexList[index] is False:
+                        if index in faultFilesLine[num]:
+                            for item in sbflMethod:
+                                sbflSus[item][index-distance] = susScoreList[item][t]
+                            tFlag2 = False
+                        elif tFlag2 is False:
+                            break
+                        t += 1
+                for method in list(sbflSus.keys()):
+                    for key in list(sbflSus[method].keys()):
+                        if sbflSus[method][key] == 0:
+                            del sbflSus[method][key]
+                    faultSbflSus[num][method] = dict(
+                        sorted(sbflSus[method].items(), key=lambda x: x[1], reverse=True))
+            checkAndCreateDir(os.path.join(faultlocalizationResultPath))
+            checkAndCreateDir(os.path.join(
+                faultlocalizationResultPath, project))
+            checkAndCreateDir(os.path.join(
+                faultlocalizationResultPath, project, version))
+            with open(suspiciousSbflPath, 'w') as f:
+                f.write(json.dumps(faultSbflSus, indent=2))
+            with open(faultLocalizationPath, 'w') as f:
+                f.write(json.dumps(faultLineDic, indent=2))
+        with open(suspiciousSbflPath, 'r') as f:
+            faultSbflSus = json.load(f)
+        with open(faultLocalizationPath, 'r') as f:
+            faultLineDic = json.load(f)
+        if ip != '202.4.130.30':
+            put_file('202.4.130.30', 'fanluxi', password,
+                     suspiciousSbflPath, suspiciousSbflPath)
+        if ip != '202.4.130.30':
+            put_file('202.4.130.30', 'fanluxi', password,
+                     faultLocalizationPath, faultLocalizationPath)
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        line_number = exc_tb.tb_lineno
+        print(f'\033[1;31mError at line {line_number}: {e}\033[0m')
+        logging.error(f'Error at line {line_number}: {e}')
+        return
+    print('\033[1;32m************** SUCCESS **************\033[0m')
+    return faultLineDic, faultSbflSus
+
+
+def generateFom(project, version) -> list:
+    """
+    通过major获取变异体信息
+    muInfo存储格式:
+    index: 变异体序号
+    linenum: 变异体行号
+    typeOp: 变异算子类型
+    mutFilePath: 变异体存储位置
+    relativePath: 变异体文件在项目中的相对路径
+    """
+    try:
+        clearDir("./tmp")
+        # 变异体文件存储位置
+        mutantPath = os.path.join(mutantsFilePath, project, version)
+        if not os.path.exists(mutantPath):
+            print('\033[1;32m************** generateFom **************\033[0m')
+            shutil.copytree(os.path.join(djSrcPath, project, version), "./tmp")
+            run('./runMajor.sh')
+            shutil.copytree("./tmp/mutants", mutantPath)
+            shutil.copyfile("./tmp/mutants.log", mutantPath + "/mutants.log")
+        # 变异体信息存储位置
+        muInfoPath = os.path.join(
+            faultlocalizationResultPath, project, version, "muInfo.json")
+        if not os.path.exists(muInfoPath):
+            muInfoList = list()
+            with open(mutantPath + "/mutants.log", "r") as f:
+                for line in f.readlines():
+                    muInfo = dict()
+                    muInfo['index'] = int(line.split(':')[0])
+                    muInfo['linenum'] = int(line.split(':')[5])
+                    muInfo['typeOp'] = line.split(':')[1]
+                    muInfoList.append(muInfo)
+            for i in os.listdir(mutantPath):
+                # 找到以序号为名的文件夹， 除去mutants.log
+                if os.path.isdir(os.path.join(mutantPath, i)):
+                    mutFileDir = os.listdir(os.path.join(mutantPath, i))[0]
+                    mutFilePath = os.path.join(mutantPath, i, mutFileDir)
+                    if len(sourcePath[project].keys()) > 1 and int(version[:-1]) > int(list(sourcePath[project].keys())[0]):
+                        relativePath = os.path.join(
+                            sourcePath[project][list(sourcePath[project].keys())[1]], mutFileDir)
+                    else:
+                        relativePath = os.path.join(
+                            sourcePath[project][list(sourcePath[project].keys())[0]], mutFileDir)
+                    # 递归找到文件
+                    while os.path.isdir(mutFilePath):
+                        mutFileDir = os.listdir(mutFilePath)[0]
+                        mutFilePath = os.path.join(mutFilePath, mutFileDir)
+                        relativePath += "/" + mutFileDir
+                    muInfoList[int(i)-1]['mutFilePath'] = mutFilePath
+                    muInfoList[int(i)-1]['relativePath'] = relativePath
+            with open(muInfoPath, 'w') as f:
+                f.write(json.dumps(muInfoList, indent=2))
+        with open(muInfoPath, 'r') as f:
+            muInfoList = json.load(f)
+        if ip != '202.4.130.30':
+            put_file('202.4.130.30', 'fanluxi',
+                     password, muInfoPath, muInfoPath)
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        line_number = exc_tb.tb_lineno
+        print(f'\033[1;31mError at line {line_number}: {e}\033[0m')
+        return None
+    print('\033[1;32m************** SUCCESS **************\033[0m')
+    return muInfoList
+
+
+def execute_fom(muInfo):
+    print("变异体编号:", muInfo["index"])
+    executor = ExecutorTool.Executor(
+        muInfo["project"], muInfo["version"], muInfo)
+    muExecutResult = dict()
+    muExecutResult["index"] = muInfo["index"]
+    muExecutResult["linenum"] = muInfo["linenum"]
+    muExecutResult["status"] = executor.status
+    muExecutResult["passList"] = executor.passList
+    muExecutResult["killList"] = executor.killList
+    muExecutResult["mKillList"] = executor.mKillList
+    return muExecutResult
+
+
+def executeFom(project, version, muInfoList):
+    """
+    执行一阶变异体
+    muResult存储格式:
+    index: 变异体序号
+    linenum: 变异体行号
+    status: 执行结果(0为执行失败,1为执行成功)
+    passList: 执行结果
+    killList: 杀死信息
+    mKillList: MUSE版杀死信息
+    """
+    try:
+        muResultPath = os.path.join(
+            faultlocalizationResultPath, project, version, "muResult.json")
+        if not os.path.exists(muResultPath):
+            print('\033[1;32m************** executeFom **************\033[0m')
+            resultList = list()
+            for item in muInfoList:
+                item["project"] = project
+                item["version"] = version
+            with multiprocessing.Pool(processes=2) as pool:
+                async_results = [pool.apply_async(
+                    execute_fom, (muInfo, )) for muInfo in muInfoList]
+                for async_result in async_results:
+                    try:
+                        result = async_result.get(11 * 60)
+                        resultList.append(result)
+                    except multiprocessing.TimeoutError:
+                        print(
+                            f"Process {async_result._job} timed out and will be terminated")
+                        pool.terminate()
+                        pool.join()
+                    except KeyboardInterrupt:
+                        print("Interrupted by user and will be terminated")
+                        pool.terminate()
+                        pool.join()
+                        exit(1)
+            with open(muResultPath, 'w') as f:
+                f.write(json.dumps(resultList, indent=2))
+        with open(muResultPath, 'r') as f:
+            resultList = json.load(f)
+        if ip != '202.4.130.30':
+            put_file('202.4.130.30', 'fanluxi', password,
+                     muResultPath, muResultPath)
+            
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        line_number = exc_tb.tb_lineno
+        print(f'\033[1;31mError at line {line_number}: {e}\033[0m')
+        logging.error(f'Error at line {line_number}: {e}')
+        return
+    print('\033[1;32m************** SUCCESS **************\033[0m')
+    return resultList
+
+
+def generateSom(project, version) -> list:
+    """
+    通过major获取变异体信息
+    somInfo存储格式:
+    index: 变异体序号
+    linenum1: 变异体1行号
+    linenum2: 变异体2行号
+    typeOp1: 变异算子类型1
+    typeOp2: 变异算子类型2
+    mutFilePath1: 变异体1存储位置
+    mutFilePath2: 变异体2存储位置
+    relativePath1: 变异体1文件在项目中的相对路径
+    relativePath2: 变异体2文件在项目中的相对路径
+    """
+    try:
+        clearDir("./tmp")
+        # 变异体文件存储位置
+        mutantPath = os.path.join(mutantsFilePath, project, version)
+        if not os.path.exists(mutantPath):
+            print('\033[1;32m************** generateFom **************\033[0m')
+            shutil.copytree(os.path.join(djSrcPath, project, version), "./tmp")
+            run('./runMajor.sh')
+            shutil.copytree("./tmp/mutants", mutantPath)
+            shutil.copyfile("./tmp/mutants.log", mutantPath + "/mutants.log")
+        # 变异体信息存储位置
+        muInfoPath = os.path.join(
+            SOMfaultlocalizationResultPath, project, version, "muInfo.json")
+        if not os.path.exists(muInfoPath):
+            muInfoList = list()
+            with open(mutantPath + "/mutants.log", "r") as f:
+                for line in f.readlines():
+                    muInfo = dict()
+                    muInfo['index'] = int(line.split(':')[0])
+                    muInfo['linenum'] = int(line.split(':')[5])
+                    muInfo['typeOp'] = line.split(':')[1]
+                    muInfoList.append(muInfo)
+            for i in os.listdir(mutantPath):
+                # 找到以序号为名的文件夹， 除去mutants.log
+                if os.path.isdir(os.path.join(mutantPath, i)):
+                    mutFileDir = os.listdir(os.path.join(mutantPath, i))[0]
+                    mutFilePath = os.path.join(mutantPath, i, mutFileDir)
+                    if len(sourcePath[project].keys()) > 1 and int(version[:-1]) > int(list(sourcePath[project].keys())[0]):
+                        relativePath = os.path.join(
+                            sourcePath[project][list(sourcePath[project].keys())[1]], mutFileDir)
+                    else:
+                        relativePath = os.path.join(
+                            sourcePath[project][list(sourcePath[project].keys())[0]], mutFileDir)
+                    # 递归找到文件
+                    while os.path.isdir(mutFilePath):
+                        mutFileDir = os.listdir(mutFilePath)[0]
+                        mutFilePath = os.path.join(mutFilePath, mutFileDir)
+                        relativePath += "/" + mutFileDir
+                    muInfoList[int(i)-1]['mutFilePath'] = mutFilePath
+                    muInfoList[int(i)-1]['relativePath'] = relativePath
+            with open(muInfoPath, 'w') as f:
+                f.write(json.dumps(muInfoList, indent=2))
+        with open(muInfoPath, 'r') as f:
+            muInfoList = json.load(f)
+        if ip != '202.4.130.30':
+            put_file('202.4.130.30', 'fanluxi',
+                     password, muInfoPath, muInfoPath)
+        
+        
+        # SOM信息存储位置
+        somInfoPath = os.path.join(
+            SOMfaultlocalizationResultPath, project, version, "somInfo.json")
+        if not os.path.exists(somInfoPath):
+            somInfoList = list()
+            num = 1
+            for i, item1 in enumerate(muInfoList):
+                for j, item2 in enumerate(muInfoList):
+                    if i >= j:
+                        continue
+                    if item1['linenum'] != item2['linenum']:
+                        continue
+                    somInfo = dict()
+                    somInfo['index'] = num
+                    num += 1
+                    somInfo['linenum1'] = item1['linenum']
+                    somInfo['linenum2'] = item2['linenum']
+                    somInfo['typeOp1'] = item1['typeOp']
+                    somInfo['typeOp2'] = item2['typeOp']
+                    somInfo['mutFilePath1'] = item1['mutFilePath']
+                    somInfo['mutFilePath2'] = item2['mutFilePath']
+                    somInfo['relativePath1'] = item1['relativePath']
+                    somInfo['relativePath2'] = item2['relativePath']
+                    somInfoList.append(somInfo)
+            with open(somInfoPath, 'w') as f:
+                f.write(json.dumps(somInfoList, indent=2))
+        with open(somInfoPath, 'r') as f:
+            somInfoPath = json.load(f)
+        if ip != '202.4.130.30':
+            put_file('202.4.130.30', 'fanluxi',
+                     password, somInfoPath, somInfoPath)
+            
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        line_number = exc_tb.tb_lineno
+        print(f'\033[1;31mError at line {line_number}: {e}\033[0m')
+        return None
+    print('\033[1;32m************** SUCCESS **************\033[0m')
+    return somInfoPath
+
+
+def execute_som(somInfo):
+    print("变异体编号:", somInfo["index"])
+    executor = secondOrderExecutorTool.secondOrderExecutorTool(
+        somInfo["project"], somInfo["version"], somInfo)
+    somExecutResult = dict()
+    somExecutResult["index"] = somInfo["index"]
+    somExecutResult["linenum1"] = somInfo["linenum1"]
+    somExecutResult["linenum2"] = somInfo["linenum2"]
+    somExecutResult["status"] = executor.status
+    somExecutResult["passList"] = executor.passList
+    somExecutResult["killList"] = executor.killList
+    somExecutResult["mKillList"] = executor.mKillList
+    return somExecutResult
+
+
+def executeSom(project, version, somInfoPath):
+    """
+    执行二阶变异体
+    muResult存储格式:
+    index: 变异体序号
+    linenum: 变异体行号
+    status: 执行结果(0为执行失败,1为执行成功)
+    passList: 执行结果
+    killList: 杀死信息
+    mKillList: MUSE版杀死信息
+    """
+    try:
+        somResultPath = os.path.join(
+            SOMfaultlocalizationResultPath, project, version, "somResult.json")
+        failingTestsPath = os.path.join(
+            SOMfaultlocalizationResultPath, project, version, "failing_tests")
+        
+        if not os.path.exists(somResultPath):
+            print('\033[1;32m************** executeFom **************\033[0m')
+            resultList = list()
+            for item in somInfoPath:
+                item["project"] = project
+                item["version"] = version
+            # with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            #     # async_results = [executor.submit(execute_som, (somInfoPath[0], ))]
+            #     async_results = [executor.submit(execute_som, somInfo) for somInfo in somInfoPath]
+            #     for async_result in concurrent.futures.as_completed(async_results, timeout=11 * 60):
+            #         try:
+            #             result = async_result.result()
+            #             resultList.append(result)
+            #         except concurrent.futures.TimeoutError:
+            #             print(f"Thread {async_result} timed out and will be cancelled")
+            #             for task in async_results:
+            #                 task.cancel()
+            #         except KeyboardInterrupt:
+            #             print("Interrupted by user and will be cancelled")
+            #             for task in async_results:
+            #                 task.cancel()
+            #             exit(1)
+            # for somInfo in somInfoPath:
+            #     try:
+            #         result = execute_som(somInfo)
+            #         resultList.append(result)
+            #     except KeyboardInterrupt:
+            #         print("Interrupted by user")
+            #         exit(1)
+            with multiprocessing.Pool(processes=3) as pool:
+                # async_results = [pool.apply_async(
+                #     execute_som, (somInfoPath[0], ))]
+                async_results = [pool.apply_async(
+                    execute_som, (somInfo, )) for somInfo in somInfoPath]
+                for async_result in async_results:
+                    try:
+                        result = async_result.get(11 * 60)
+                        resultList.append(result)
+                    except multiprocessing.TimeoutError:
+                        print(
+                            f"Process {async_result._job} timed out and will be terminated")
+                        pool.terminate()
+                        pool.join()
+                    except KeyboardInterrupt:
+                        print("Interrupted by user and will be terminated")
+                        pool.terminate()
+                        pool.join()
+                        exit(1)
+            with open(somResultPath, 'w') as f:
+                f.write(json.dumps(resultList, indent=2))
+        with open(somResultPath, 'r') as f:
+            resultList = json.load(f)
+        if ip != '202.4.130.30':
+            put_file('202.4.130.30', 'fanluxi', password,
+                     somResultPath, somResultPath)
+            sftp_upload('202.4.130.30', 'fanluxi', password,
+                        failingTestsPath, failingTestsPath)
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        line_number = exc_tb.tb_lineno
+        print(f'\033[1;31mError at line {line_number}: {e}\033[0m')
+        logging.error(f'Error at line {line_number}: {e}')
+        return
+    print('\033[1;32m************** SUCCESS **************\033[0m')
+    return resultList
+
+
+def calFomMbfl(project, version, resultList):
+    """
+    通过变异体的执行矩阵和杀死矩阵计算语句怀疑度
+    :param Fom: 变异体的信息,主要用到行号
+    :param FomResult: 变异体的执行结果和杀死信息,数组形式存储,第一个是执行结果,第二个是杀死信息.
+                      执行结果: 1代表失败,0代表通过
+                      杀死信息: 1代表杀死,0代表没杀死
+    :return: 变异体信息列表
+    """
+    try:
+        suspiciousFirstOrderPath = os.path.join(
+            faultlocalizationResultPath, project, version, "suspicious_first_order.json")
+        Sus_Jaccard = {}
+        Sus_Ochiai = {}
+        Sus_Op2 = {}
+        Sus_Tarantula = {}
+        Sus_Dstar3 = {}
+
+        for i in range(0, len(resultList)):
+            if resultList[i]["status"] == 0:
+                continue
+            Anp = 0
+            Anf = 0
+            Akp = 0
+            Akf = 0
+            for index in range(0, len(resultList[i]["passList"])):
+                if resultList[i]["passList"][index] == 1:
+                    if resultList[i]["killList"][index] == 1:
+                        Akf += 1
+                    else:
+                        Anf += 1
+                else:
+                    if resultList[i]["killList"][index] == 1:
+                        Akp += 1
+                    else:
+                        Anp += 1
+            if Sus_Jaccard.get(resultList[i]["linenum"]) == None:
+                Sus_Jaccard[resultList[i]["linenum"]] = Jaccard(Akf, Anf, Akp)
+            else:
+                Sus_Jaccard[resultList[i]["linenum"]] = max(
+                    Sus_Jaccard[resultList[i]["linenum"]], Jaccard(Akf, Anf, Akp))
+
+            if Sus_Ochiai.get(resultList[i]["linenum"]) == None:
+                Sus_Ochiai[resultList[i]["linenum"]] = Ochiai(Akf, Anf, Akp)
+            else:
+                Sus_Ochiai[resultList[i]["linenum"]] = max(
+                    Sus_Ochiai[resultList[i]["linenum"]], Ochiai(Akf, Anf, Akp))
+
+            if Sus_Op2.get(resultList[i]["linenum"]) == None:
+                Sus_Op2[resultList[i]["linenum"]] = Op2(Akf, Akp, Anp)
+            else:
+                Sus_Op2[resultList[i]["linenum"]] = max(
+                    Sus_Op2[resultList[i]["linenum"]], Op2(Akf, Akp, Anp))
+
+            if Sus_Tarantula.get(resultList[i]["linenum"]) == None:
+                Sus_Tarantula[resultList[i]["linenum"]
+                              ] = Tarantula(Akf, Anf, Akp, Anp)
+            else:
+                Sus_Tarantula[resultList[i]["linenum"]] = max(
+                    Sus_Tarantula[resultList[i]["linenum"]], Tarantula(Akf, Anf, Akp, Anp))
+
+            if Sus_Dstar3.get(resultList[i]["linenum"]) == None:
+                Sus_Dstar3[resultList[i]["linenum"]] = Dstar3(Akf, Akp, Anf)
+            else:
+                Sus_Dstar3[resultList[i]["linenum"]] = max(
+                    Sus_Dstar3[resultList[i]["linenum"]], Dstar3(Akf, Akp, Anf))
+
+        Sus_Jaccard = sorted(Sus_Jaccard.items(),
+                             key=operator.itemgetter(1), reverse=True)
+        Sus_Ochiai = sorted(Sus_Ochiai.items(),
+                            key=operator.itemgetter(1), reverse=True)
+        Sus_Op2 = sorted(
+            Sus_Op2.items(), key=operator.itemgetter(1), reverse=True)
+        Sus_Tarantula = sorted(Sus_Tarantula.items(),
+                               key=operator.itemgetter(1), reverse=True)
+        Sus_Dstar3 = sorted(Sus_Dstar3.items(),
+                            key=operator.itemgetter(1), reverse=True)
+        checkAndCreateDir(os.path.join(faultlocalizationResultPath, project))
+        checkAndCreateDir(os.path.join(
+            faultlocalizationResultPath, project, version))
+        with open(suspiciousFirstOrderPath, 'w') as f:
+            f.write("")
+            f.writelines("Sus_Jaccard:\n")
+            f.write(json.dumps(dict(Sus_Jaccard), indent=2))
+            f.writelines("\n")
+
+            f.writelines("Sus_Ochiai:\n")
+            f.write(json.dumps(dict(Sus_Ochiai), indent=2))
+            f.writelines("\n")
+
+            f.writelines("Sus_Op2:\n")
+            f.write(json.dumps(dict(Sus_Op2), indent=2))
+            f.writelines("\n")
+
+            f.writelines("Sus_Tarantula:\n")
+            f.write(json.dumps(dict(Sus_Tarantula), indent=2))
+            f.writelines("\n")
+
+            f.writelines("Sus_Dstar3:\n")
+            f.write(json.dumps(dict(Sus_Dstar3), indent=2))
+            f.writelines("\n")
+
+        f.close()
+        if ip != '202.4.130.30':
+            put_file('202.4.130.30', 'fanluxi', password,
+                     suspiciousFirstOrderPath, suspiciousFirstOrderPath)
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        line_number = exc_tb.tb_lineno
+        print(f'\033[1;31mError at line {line_number}: {e}\033[0m')
+        logging.error(f'Error at line {line_number}: {e}')
+
+
+# 一阶变异体
+def FOM(project, version):
+    # print(project, version)
+    logging.info(project + " " + version)
+    try:
+        faultLineDic, sbflSus = getSbflSus(project, version)
+        # print(faultLineDic)
+        logging.info(faultLineDic)
+        muInfoList = generateFom(project, version)
+        resultList = executeFom(project, version, muInfoList)
+        # calFomMbfl(project, version, resultList)
+        logging.info(project + " " + version + " success!")
+
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        line_number = exc_tb.tb_lineno
+        print(f'\033[1;31mError at line {line_number}: {e}\033[0m')
+        logging.error(f'Error at line {line_number}: {e}')
+        return
+
+
+# 二阶变异体
+def SOM(project, version):
+    # print(project, version)
+    logging.info(project + " " + version)
+    try:
+        faultLineDic, sbflSus = getSbflSus(project, version)
+        # print(faultLineDic)
+        logging.info(faultLineDic)
+        muInfoList = generateSom(project, version)
+        resultList = executeSom(project, version, muInfoList)
+        # calFomMbfl(project, version, resultList)
+        logging.info(project + " " + version + " success!")
+
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        line_number = exc_tb.tb_lineno
+        print(f'\033[1;31mError at line {line_number}: {e}\033[0m')
+        logging.error(f'Error at line {line_number}: {e}')
+        return
+
+ip = get_host_ip()
+if __name__ == '__main__':
+    try:
+        clearDir(configData['tempSrcPath'])
+        checkAndCreateDir(configData['tempSrcPath'])
+        logger = logger_config(log_path='output.log')
+        logging.getLogger("paramiko").setLevel(logging.WARNING)
+        # with open("./failVersion.json", "r") as f:
+        #     failVersion = json.load(f)
+        for projectDir in project.keys():
+            projectDir = "Lang"
+            for versionNum in range(1, project[projectDir] + 1):
+                versionDir = str(versionNum) + 'b'
+                # versionDir = "1b"
+                # if not failVersion.get(projectDir) is None and versionDir in failVersion[projectDir]:
+                #     continue
+                if ip != '202.4.130.30':
+                    clearDir(configData['djSrcPath'])
+                    clearDir(configData['outputCleanPath'])
+                    clearDir(configData['tpydataPath'])
+                    clearDir(configData['faliingTestOutputPath'])
+                    ssh = paramiko.SSHClient()
+                    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    ssh.connect("202.4.130.30", username="fanluxi",
+                                password=password)
+                    sftp = ssh.open_sftp()
+                    try:
+                        sftp.stat(os.path.join(
+                            faultlocalizationResultPath, projectDir, versionDir))
+                    except FileNotFoundError:
+                        try:
+                            sftp.stat(os.path.join(
+                                faultlocalizationResultPath, projectDir))
+                        except FileNotFoundError:
+                            sftp.mkdir(os.path.join(
+                                faultlocalizationResultPath, projectDir))
+                        finally:
+                            sftp.mkdir(os.path.join(
+                                faultlocalizationResultPath, projectDir, versionDir))
+                        if cpFromRemote():
+                            # FOM(projectDir, versionDir)
+                            SOM(projectDir, versionDir)
+                        clearDir(configData['djSrcPath'])
+                        clearDir(configData['outputCleanPath'])
+                        clearDir(configData['tpydataPath'])
+                        clearDir(configData['faliingTestOutputPath'])
+                    finally:
+                        sftp.close()
+                        ssh.close()
+                elif not os.path.exists(os.path.join(faultlocalizationResultPath, projectDir, versionDir)):
+                    print(projectDir, versionDir)
+                    try:
+                        os.makedirs(os.path.join(
+                            faultlocalizationResultPath, projectDir, versionDir))
+                    finally:
+                        # FOM(projectDir, versionDir)
+                        SOM(projectDir, versionDir)
+            exit(1)
+    
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        line_number = exc_tb.tb_lineno
+        print(f'\033[1;31mError at line {line_number}: {e}\033[0m')
+        logging.error(f'Error at line {line_number}: {e}')
