@@ -1,4 +1,4 @@
-# HSD
+# SCOPE
 
 The `mutationTool` directory contains operations for mutating the source program to generate higher-order mutants. You can perform the mutation operations by running `main.py`.
 
